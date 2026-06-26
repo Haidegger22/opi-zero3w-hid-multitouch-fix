@@ -1,0 +1,2 @@
+ACTION=="add", KERNEL=="event1", SUBSYSTEM=="input", \
+  ATTRS{idVendor}=="0484", ATTRS{idProduct}=="5750", MODE="0666"
