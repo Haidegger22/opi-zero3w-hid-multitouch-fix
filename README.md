@@ -114,7 +114,8 @@ hid-multitouch/
 ├── build-hid-multitouch.sh # Автоматический скрипт сборки
 ├── hid-multitouch.c        # Исходник (из v6.6)
 ├── hid-ids.h               # Хедер (из v6.6)
-└── 99-touchscreen.rules    # Udev-правило
+├── 99-touchscreen.rules    # Udev-правило
+└── touch-rightclick.py     # Долгий тап → ПКМ (Python/evdev)
 ```
 
 ## Совместимость 🧪
@@ -129,48 +130,75 @@ hid-multitouch/
 
 ## Настройка кликов (ЛКМ/ПКМ) 🖱️
 
-На тачскрине (HID-тач или резистивный XPT2046) по умолчанию:
+На тачскрине (HID-тач) по умолчанию:
 
 | Действие | Результат |
 |----------|-----------|
 | Одиночное касание | **ЛКМ** ✅ |
-| Долгий тап (>~300 мс) | **ПКМ** (контекстное меню) ✅ |
+| Долгий тап (>~400 мс) | **ПКМ** (контекстное меню) — требуется скрипт ⚠️ |
 | Перетаскивание | Drag (ЛКМ + движение) ✅ |
 
-### Если ПКМ (долгий тап) не работает
+### Важно: libinput не поддерживает Long Press для QDtech MPI5001
 
-Проверь настройки libinput:
+У этого тачскрина (`QDtech MPI5001`) в libinput нет свойств `libinput Long Press Enabled` — он определяется как `touch`, но драйвер не предоставляет встроенной эмуляции ПКМ через долгий тап.
 
-```bash
-# Список устройств ввода
-xinput list
+**Решение:** Python-скрипт `touch-rightclick.py`, который читает сырые события с тачскрина через evdev и эмулирует ПКМ через `xdotool`.
 
-# Параметры тачскрина (id — номер из списка выше)
-xinput list-props <id> | grep -i "long"
-
-# Включить эмуляцию ПКМ через долгий тап (0 = выкл, 1 = вкл)
-xinput set-prop <id> "libinput Long Press Enabled" 1
-
-# Порог срабатывания ПКМ (мс)
-xinput set-prop <id> "libinput Long Press Time" 400
-```
-
-> **Для XFCE:** Кнопка «Mouse» → вкладка «Touchpad» — опция «Use two-finger tap for right click» работает только для тачпадов. На тачскрине ПКМ включается через libinput (см. выше).
-
-### Постоянная настройка (автозагрузка)
-
-Создай `~/.xinitrc` или профиль XFCE, например через `~/.xprofile`:
+### Установка скрипта
 
 ```bash
-cat >> ~/.xprofile << 'XPROF'
-# Включение долгого тапа как ПКМ для тачскрина
-TOUCH_ID=$(xinput list | grep -i "touch" | grep -oP 'id=\K\d+' | head -1)
-if [ -n "$TOUCH_ID" ]; then
-  xinput set-prop $TOUCH_ID "libinput Long Press Enabled" 1
-  xinput set-prop $TOUCH_ID "libinput Long Press Time" 400
-fi
-XPROF
+# Зависимости (обычно уже есть)
+sudo apt install -y python3-evdev xdotool
+
+# Копируем скрипт
+cp touch-rightclick.py ~/.local/bin/
+chmod +x ~/.local/bin/touch-rightclick.py
 ```
+
+### Настройка
+
+Параметры в начале скрипта:
+
+```python
+LONG_PRESS_MS = 400       # мс — время удержания для срабатывания ПКМ
+MOVE_THRESHOLD = 20       # пикселей — если двигать палец больше, это drag, не ПКМ
+DEVICE_PATH = None        # None = автоопределение тачскрина
+```
+
+### Автозапуск
+
+```bash
+mkdir -p ~/.config/autostart
+cat > ~/.config/autostart/touch-rightclick.desktop << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=Touch Right Click
+Comment=Long press → right click for touchscreen
+Exec=/home/orangepi/.local/bin/touch-rightclick.py
+Hidden=false
+NoDisplay=false
+X-XFCE-Autostart-Phase=2
+X-XFCE-Autostart-Enabled=true
+EOF
+```
+
+### Проверка
+
+```bash
+# Запустить вручную (с DISPLAY=:0)
+/home/orangepi/.local/bin/touch-rightclick.py &
+
+# Лог работы
+cat /tmp/touch-rightclick.log
+
+# Пример лога:
+# [07:49:06] Найден тачскрин: QDtech MPI5001 (/dev/input/event6)
+# [07:49:06] 🚀 Запуск: QDtech MPI5001 (/dev/input/event6)
+# [07:49:06] Параметры: LONG_PRESS=400ms, MOVE_THRESHOLD=20px
+# [07:50:10] ПКМ ✅
+```
+
+> 💡 При каждом долгом табе (>400 мс без движения) в логе появится `ПКМ ✅`.
 
 ## Настройка экранной клавиатуры Onboard 🎹
 
@@ -256,27 +284,6 @@ ps aux | grep at-spi
 ```
 
 Тапни в адресную строку Chromium — Onboard должна появиться. Тапни вне поля — скроется.
-
-## Структура репозитория 📁
-
-```
-hid-multitouch/
-├── README.md               # Эта инструкция
-├── build-hid-multitouch.sh # Автоматический скрипт сборки
-├── hid-multitouch.c        # Исходник (из v6.6)
-├── hid-ids.h               # Хедер (из v6.6)
-└── 99-touchscreen.rules    # Udev-правило
-```
-
-## Совместимость 🧪
-
-Проверено:
-- **Плата:** Orange Pi Zero 3W (Allwinner A733)
-- **Ядро:** `6.6.98-sun60iw2`
-- **ОС:** Orange Pi 1.0.0 Bullseye (Debian 11)
-- **Дисплей:** HZWDONE 7" IPS (HDMI + USB тач)
-- **Тачскрин:** QDtech MPI5001 (USB ID `0484:5750`)
-- **Контроллер:** ASMedia ASM2364, JMicron JMS583, RTL9210 (NVMe-мосты не влияют)
 
 ## Благодарности 🦞
 
