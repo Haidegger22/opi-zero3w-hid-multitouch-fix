@@ -98,11 +98,7 @@ def main():
         sys.exit(1)
 
     device = evdev.InputDevice(dev_path)
-    try:
-        device.grab()  # захватываем устройство (чтобы события не уходили в X)
-    except Exception:
-        pass  # grab не обязателен
-
+    # ⚠️ Не используем device.grab() — это ломает ЛКМ в X
     log(f"✅ Запущен: {device.name}")
 
     touched = False
