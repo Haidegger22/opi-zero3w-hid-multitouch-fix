@@ -34,6 +34,9 @@ DEVICE_PATH = None         # None = автоопределение, или "/dev
 RETRY_SECONDS = 30         # сколько секунд ждать появления тачскрина при старте
 RETRY_INTERVAL = 2         # пауза между попытками найти тачскрин
 
+# Исключения для ПКМ — не эмулировать если активно окно браузера
+BROWSER_WM_CLASS = ("chromium", "chrome", "firefox", "Navigator", "Google-chrome")
+
 # --- Логирование ---
 LOG = "/tmp/touch-rightclick.log"
 
@@ -73,8 +76,36 @@ def find_touchscreen_with_retry():
         time.sleep(RETRY_INTERVAL)
     return None
 
+def is_browser_active():
+    """Проверяет, не в браузере ли сейчас фокус (Chromium эмулирует ПКМ сам)."""
+    try:
+        env_display = {"DISPLAY": os.environ.get("DISPLAY", ":0")}
+        win_id = subprocess.run(
+            ["xdotool", "getactivewindow"],
+            capture_output=True, text=True, timeout=2,
+            env={**os.environ, **env_display}
+        ).stdout.strip()
+        if not win_id:
+            return False
+        result = subprocess.run(
+            ["xprop", "-id", win_id, "WM_CLASS"],
+            capture_output=True, text=True, timeout=2,
+            env={**os.environ, **env_display}
+        ).stdout.strip()
+        # WM_CLASS(STRING) = "chromium-browser", "Chromium-browser"
+        for cls in BROWSER_WM_CLASS:
+            if cls.lower() in result.lower():
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def send_rmb():
-    """Клик правой кнопкой мыши через xdotool."""
+    """Клик правой кнопкой мыши через xdotool, если активное окно не браузер."""
+    if is_browser_active():
+        log("⏭ Пропуск ПКМ — активен браузер (он сам обрабатывает долгий тап)")
+        return
     try:
         subprocess.run(
             ["xdotool", "click", "3"],
