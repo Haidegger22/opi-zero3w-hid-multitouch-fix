@@ -26,6 +26,29 @@ import subprocess
 import time
 import sys
 import os
+import fcntl
+
+# --- PID lock ---
+PID_FILE = "/tmp/touch-rightclick.pid"
+
+
+def acquire_lock():
+    """Проверяет, не запущен ли уже скрипт. Если нет — создаёт PID-файл."""
+    try:
+        fd = os.open(PID_FILE, os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Записываем свой PID
+        os.truncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode())
+        return fd
+    except (IOError, BlockingIOError):
+        try:
+            with open(PID_FILE) as f:
+                pid = f.read().strip()
+            log(f"🚫 Уже запущен (PID {pid}), выход")
+        except:
+            log("🚫 Уже запущен, выход")
+        sys.exit(0)
 
 # --- Конфигурация ---
 LONG_PRESS_MS = 400        # мс — время удержания для ПКМ
@@ -118,6 +141,7 @@ def send_rmb():
         log(f"❌ Ошибка xdotool: {e}")
 
 def main():
+    lock_fd = acquire_lock()
     log("🚀 Запуск touch-rightclick.py")
     log(f"   LONG_PRESS={LONG_PRESS_MS}ms, MOVE_THRESHOLD={MOVE_THRESHOLD}px")
     log(f"   DISPLAY={os.environ.get('DISPLAY', '(не задан, будет :0)')}")
