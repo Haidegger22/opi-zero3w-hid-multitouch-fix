@@ -160,12 +160,13 @@ chmod +x ~/.local/bin/touch-rightclick.py
 Параметры в начале скрипта:
 
 ```python
-LONG_PRESS_MS = 400       # мс — время удержания для срабатывания ПКМ
-MOVE_THRESHOLD = 20       # пикселей — если двигать палец больше, это drag, не ПКМ
-DEVICE_PATH = None        # None = автоопределение тачскрина
+LONG_PRESS_MS = 400        # мс — время удержания для срабатывания ПКМ
+MOVE_THRESHOLD = 20        # пикселей — если двигать палец больше, это drag, не ПКМ
+DEVICE_PATH = None         # None = автоопределение тачскрина
+RETRY_SECONDS = 30         # сколько секунд ждать тачскрин при старте
 ```
 
-### Автозапуск
+### Автозапуск (XFCE)
 
 ```bash
 mkdir -p ~/.config/autostart
@@ -174,13 +175,17 @@ cat > ~/.config/autostart/touch-rightclick.desktop << 'EOF'
 Type=Application
 Name=Touch Right Click
 Comment=Long press → right click for touchscreen
-Exec=/home/orangepi/.local/bin/touch-rightclick.py
+Exec=env DISPLAY=:0 /home/orangepi/.local/bin/touch-rightclick.py
 Hidden=false
 NoDisplay=false
 X-XFCE-Autostart-Phase=2
 X-XFCE-Autostart-Enabled=true
 EOF
 ```
+
+> ⚠️ **Важно:** `Exec=` обязательно с `env DISPLAY=:0` — XFCE может не передавать DISPLAY при автозапуске, и xdotool не сможет эмулировать клик.
+
+> 🔄 Скрипт имеет встроенный retry: если тачскрин ещё не инициализирован при старте, он будет ждать до 30 секунд, проверяя каждые 2 секунды.
 
 ### Проверка
 

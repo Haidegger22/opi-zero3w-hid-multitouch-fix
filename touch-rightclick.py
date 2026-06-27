@@ -1,119 +1,143 @@
 #!/usr/bin/env python3
 """
 Эмуляция ПКМ (правая кнопка мыши) через долгий тап на тачскрине.
-Использует evdev для чтения событий тачскрина и xdotool для эмуляции клика.
 
-Установка автозапуска:
-  1. Поместить скрипт: ~/.local/bin/touch-rightclick.py
-  2. chmod +x ~/.local/bin/touch-rightclick.py
-  3. Добавить в автозапуск XFCE (~/.config/autostart/touch-rightclick.desktop):
-     [Desktop Entry]
-     Type=Application
-     Name=Touch Right Click
-     Exec=/home/orangepi/.local/bin/touch-rightclick.py
-     Hidden=false
-     NoDisplay=false
-     X-XFCE-Autostart-Phase=2
-     X-XFCE-Autostart-Enabled=true
+Как это работает:
+  1. Открывает тачскрин (через evdev), ждёт готовности если надо
+  2. При касании — запоминает время
+  3. При отпускании — если прошло > LONG_PRESS_MS И движения было < MOVE_THRESHOLD → ПКМ
+  4. Если палец двигался дальше порога — это drag, отмена ПКМ
+
+Автозапуск (~/.config/autostart/touch-rightclick.desktop):
+  [Desktop Entry]
+  Type=Application
+  Name=Touch Right Click
+  Comment=Long press → right click for touchscreen
+  Exec=env DISPLAY=:0 /home/orangepi/.local/bin/touch-rightclick.py
+  Hidden=false
+  NoDisplay=false
+  X-XFCE-Autostart-Phase=2
+  X-XFCE-Autostart-Enabled=true
 """
 
 import evdev
+import evdev.ecodes as ec
 import subprocess
 import time
 import sys
 import os
 
 # --- Конфигурация ---
-LONG_PRESS_MS = 400       # мс — время для ПКМ
-MOVE_THRESHOLD = 20       # пикселей — допустимое движение (для исключения drag)
-DEVICE_PATH = None        # автоопределение, или задать вручную: "/dev/input/event6"
+LONG_PRESS_MS = 400        # мс — время удержания для ПКМ
+MOVE_THRESHOLD = 20        # пикселей — допустимое дрожание пальца
+DEVICE_PATH = None         # None = автоопределение, или "/dev/input/eventX"
+RETRY_SECONDS = 30         # сколько секунд ждать появления тачскрина при старте
+RETRY_INTERVAL = 2         # пауза между попытками найти тачскрин
 
 # --- Логирование ---
 LOG = "/tmp/touch-rightclick.log"
 
 def log(msg):
-    with open(LOG, "a") as f:
-        f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+    try:
+        with open(LOG, "a") as f:
+            f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+    except:
+        pass  # логирование не критично
 
 def find_touchscreen():
-    """Находит первое устройство с EV_ABS и BTN_TOUCH."""
+    """Ищет тачскрин среди input-устройств. Возвращает путь или None."""
     for path in evdev.list_devices():
         try:
             dev = evdev.InputDevice(path)
             caps = dev.capabilities(absinfo=False)
-            # Проверяем, что это тачскрин: есть EV_ABS + BTN_TOUCH
-            has_abs = evdev.ecodes.EV_ABS in caps
-            has_touch = evdev.ecodes.EV_KEY in caps and evdev.ecodes.BTN_TOUCH in caps[evdev.ecodes.EV_KEY]
-            if has_abs and has_touch:
+            has_touch = (
+                ec.EV_KEY in caps
+                and ec.BTN_TOUCH in caps.get(ec.EV_KEY, [])
+                and ec.EV_ABS in caps
+            )
+            if has_touch:
                 log(f"Найден тачскрин: {dev.name} ({dev.path})")
                 return path
-        except:
-            pass
+        except Exception:
+            continue
+    return None
+
+def find_touchscreen_with_retry():
+    """Ищет тачскрин, повторяя попытки если не найден сразу."""
+    started = time.monotonic()
+    while time.monotonic() - started < RETRY_SECONDS:
+        path = find_touchscreen()
+        if path:
+            return path
+        log(f"⏳ Тачскрин не найден, повтор через {RETRY_INTERVAL}с...")
+        time.sleep(RETRY_INTERVAL)
     return None
 
 def send_rmb():
-    """Эмулирует клик правой кнопкой мыши через xdotool."""
+    """Клик правой кнопкой мыши через xdotool."""
     try:
         subprocess.run(
             ["xdotool", "click", "3"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            env={**os.environ, "DISPLAY": ":0"}
+            env={**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":0")}
         )
         log("ПКМ ✅")
     except Exception as e:
-        log(f"Ошибка xdotool: {e}")
+        log(f"❌ Ошибка xdotool: {e}")
 
 def main():
-    dev_path = DEVICE_PATH or find_touchscreen()
+    log("🚀 Запуск touch-rightclick.py")
+    log(f"   LONG_PRESS={LONG_PRESS_MS}ms, MOVE_THRESHOLD={MOVE_THRESHOLD}px")
+    log(f"   DISPLAY={os.environ.get('DISPLAY', '(не задан, будет :0)')}")
+
+    # Найти тачскрин
+    dev_path = DEVICE_PATH or find_touchscreen_with_retry()
     if not dev_path:
-        log("❌ Тачскрин не найден!")
+        log("❌ Тачскрин не найден! Выход.")
         sys.exit(1)
 
     device = evdev.InputDevice(dev_path)
-    log(f"🚀 Запуск: {device.name} ({dev_path})")
-    log(f"Параметры: LONG_PRESS={LONG_PRESS_MS}ms, MOVE_THRESHOLD={MOVE_THRESHOLD}px")
+    try:
+        device.grab()  # захватываем устройство (чтобы события не уходили в X)
+    except Exception:
+        pass  # grab не обязателен
+
+    log(f"✅ Запущен: {device.name}")
 
     touched = False
     touch_time = 0
-    touch_x, touch_y = 0, 0
+    touch_x = -1
+    touch_y = -1
 
     for event in device.read_loop():
-        if event.type == evdev.ecodes.EV_KEY:
-            if event.code == evdev.ecodes.BTN_TOUCH:
-                if event.value == 1:  # касание
-                    touched = True
-                    touch_time = time.monotonic()
-                    touch_x, touch_y = -1, -1  # сброс, ждём первую координату
-                elif event.value == 0:  # отпускание
-                    if touched:
-                        elapsed_ms = (time.monotonic() - touch_time) * 1000
-                        if elapsed_ms >= LONG_PRESS_MS:
-                            send_rmb()
-                    touched = False
+        if event.type == ec.EV_KEY and event.code == ec.BTN_TOUCH:
+            if event.value == 1:  # коснулись
+                touched = True
+                touch_time = time.monotonic()
+                touch_x = -1
+                touch_y = -1
+            elif event.value == 0:  # отпустили
+                if touched:
+                    elapsed_ms = (time.monotonic() - touch_time) * 1000
+                    if elapsed_ms >= LONG_PRESS_MS:
+                        send_rmb()
+                touched = False
 
-        elif event.type == evdev.ecodes.EV_ABS and touched:
-            # Отслеживаем движение
-            if event.code == evdev.ecodes.ABS_X:
+        elif event.type == ec.EV_ABS and touched:
+            if event.code == ec.ABS_X:
                 if touch_x == -1:
                     touch_x = event.value
-                else:
-                    # Если движение превышает порог — это drag, сбрасываем
-                    if abs(event.value - touch_x) > MOVE_THRESHOLD:
-                        touched = False
+                elif abs(event.value - touch_x) > MOVE_THRESHOLD:
+                    touched = False  # начался drag
 
-            elif event.code == evdev.ecodes.ABS_Y:
+            elif event.code == ec.ABS_Y:
                 if touch_y == -1:
                     touch_y = event.value
-                else:
-                    if abs(event.value - touch_y) > MOVE_THRESHOLD:
-                        touched = False
+                elif abs(event.value - touch_y) > MOVE_THRESHOLD:
+                    touched = False  # начался drag
 
-        elif event.type == evdev.ecodes.EV_ABS and not touched:
-            # Игнорируем ABS события без касания
-            pass
-
-        # EV_SYN — синхронизация пакета, ничего не делаем
+        # EV_SYN (0) — синхронизация, игнорируем
         # EV_MSC — вспомогательные события, игнорируем
 
 if __name__ == "__main__":
