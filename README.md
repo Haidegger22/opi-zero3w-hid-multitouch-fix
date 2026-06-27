@@ -127,6 +127,157 @@ hid-multitouch/
 - **Тачскрин:** QDtech MPI5001 (USB ID `0484:5750`)
 - **Контроллер:** ASMedia ASM2364, JMicron JMS583, RTL9210 (NVMe-мосты не влияют)
 
+## Настройка кликов (ЛКМ/ПКМ) 🖱️
+
+На тачскрине (HID-тач или резистивный XPT2046) по умолчанию:
+
+| Действие | Результат |
+|----------|-----------|
+| Одиночное касание | **ЛКМ** ✅ |
+| Долгий тап (>~300 мс) | **ПКМ** (контекстное меню) ✅ |
+| Перетаскивание | Drag (ЛКМ + движение) ✅ |
+
+### Если ПКМ (долгий тап) не работает
+
+Проверь настройки libinput:
+
+```bash
+# Список устройств ввода
+xinput list
+
+# Параметры тачскрина (id — номер из списка выше)
+xinput list-props <id> | grep -i "long"
+
+# Включить эмуляцию ПКМ через долгий тап (0 = выкл, 1 = вкл)
+xinput set-prop <id> "libinput Long Press Enabled" 1
+
+# Порог срабатывания ПКМ (мс)
+xinput set-prop <id> "libinput Long Press Time" 400
+```
+
+> **Для XFCE:** Кнопка «Mouse» → вкладка «Touchpad» — опция «Use two-finger tap for right click» работает только для тачпадов. На тачскрине ПКМ включается через libinput (см. выше).
+
+### Постоянная настройка (автозагрузка)
+
+Создай `~/.xinitrc` или профиль XFCE, например через `~/.xprofile`:
+
+```bash
+cat >> ~/.xprofile << 'XPROF'
+# Включение долгого тапа как ПКМ для тачскрина
+TOUCH_ID=$(xinput list | grep -i "touch" | grep -oP 'id=\K\d+' | head -1)
+if [ -n "$TOUCH_ID" ]; then
+  xinput set-prop $TOUCH_ID "libinput Long Press Enabled" 1
+  xinput set-prop $TOUCH_ID "libinput Long Press Time" 400
+fi
+XPROF
+```
+
+## Настройка экранной клавиатуры Onboard 🎹
+
+Onboard — лёгкая экранная клавиатура для X11, идеальна для тачскрина OPI Zero 3W.
+
+### Установка
+
+```bash
+sudo apt update
+sudo apt install -y onboard
+```
+
+### Включение авто-показа при фокусе текстовых полей
+
+Onboard 1.4.1 на Debian 11 поддерживает авто-показ через AT-SPI (Accessibility Bridge).
+
+```bash
+# 1️⃣ Включить авто-показ
+DISPLAY=:0 gsettings set org.onboard.auto-show enabled true
+
+# 2️⃣ Проверить
+gsettings get org.onboard.auto-show enabled
+# → true
+
+# 3️⃣ (Опционально) Как клавиатура позиционируется при появлении
+gsettings set org.onboard.auto-show reposition-method-floating 'prevent-occlusion'
+# Варианты: 'none' | 'prevent-occlusion' | 'reduce-travel'
+```
+
+### Автозапуск при входе в XFCE
+
+```bash
+mkdir -p ~/.config/autostart
+cat > ~/.config/autostart/onboard.desktop << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=Onboard
+Exec=onboard
+Hidden=false
+NoDisplay=false
+X-XFCE-Autostart-Phase=2
+X-XFCE-Autostart-Enabled=true
+EOF
+```
+
+> ⚠️ **Важно:** Флаг `--auto-show` **не поддерживается** версией onboard 1.4.1. Не добавляй его в `Exec=` — onboard не запустится. Авто-показ настраивается через gsettings (см. выше).
+
+### Onboard + Chromium
+
+Чтобы Onboard автоматически появлялась при фокусе полей ввода в Chromium:
+
+1. AT-SPI bridge должен быть запущен (обычно уже работает на XFCE):
+   ```bash
+   ps aux | grep at-spi-bus-launcher
+   ```
+
+2. Chromium нужно запускать с флагом `--force-renderer-accessibility`:
+   ```bash
+   chromium-browser --force-renderer-accessibility %U
+   ```
+
+   Для постоянной настройки добавь в ярлык Chromium:
+   ```bash
+   sudo sed -i 's/Exec=\/usr\/bin\/chromium-browser/Exec=\/usr\/bin\/chromium-browser --force-renderer-accessibility/' \
+     /usr/share/applications/chromium-browser.desktop
+   # Или скопируй в ~/.local/share/applications/
+   cp /usr/share/applications/chromium-browser.desktop ~/.local/share/applications/
+   sed -i 's/Exec=\/usr\/bin\/chromium-browser/Exec=\/usr\/bin\/chromium-browser --force-renderer-accessibility/' \
+     ~/.local/share/applications/chromium-browser.desktop
+   ```
+
+### Проверка
+
+```bash
+# Onboard запущена?
+ps aux | grep onboard
+
+# Авто-показ активен?
+displays=:0 gsettings get org.onboard.auto-show enabled
+
+# Accessibility bridge работает?
+ps aux | grep at-spi
+```
+
+Тапни в адресную строку Chromium — Onboard должна появиться. Тапни вне поля — скроется.
+
+## Структура репозитория 📁
+
+```
+hid-multitouch/
+├── README.md               # Эта инструкция
+├── build-hid-multitouch.sh # Автоматический скрипт сборки
+├── hid-multitouch.c        # Исходник (из v6.6)
+├── hid-ids.h               # Хедер (из v6.6)
+└── 99-touchscreen.rules    # Udev-правило
+```
+
+## Совместимость 🧪
+
+Проверено:
+- **Плата:** Orange Pi Zero 3W (Allwinner A733)
+- **Ядро:** `6.6.98-sun60iw2`
+- **ОС:** Orange Pi 1.0.0 Bullseye (Debian 11)
+- **Дисплей:** HZWDONE 7" IPS (HDMI + USB тач)
+- **Тачскрин:** QDtech MPI5001 (USB ID `0484:5750`)
+- **Контроллер:** ASMedia ASM2364, JMicron JMS583, RTL9210 (NVMe-мосты не влияют)
+
 ## Благодарности 🦞
 
 Починили вместе с [Пятницей](https://github.com/Haidegger22) и Джарвисом 🤖💚
